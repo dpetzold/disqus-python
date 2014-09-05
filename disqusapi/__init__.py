@@ -17,6 +17,7 @@ import zlib
 import os.path
 import warnings
 import socket
+from contextlib import contextmanager
 
 try:
     import simplejson as json
@@ -98,6 +99,16 @@ class Result(object):
         return list.__contains__(self.response, key)
 
 
+@contextmanager
+def https_client(method, path, data, headers, timeout):
+    conn = httplib.HTTPSConnection(HOST, timeout=timeout)
+    conn.request(method, path, data, headers)
+    try:
+        yield conn.getresponse()
+    finally:
+        conn.close()
+
+
 class Resource(object):
     def __init__(self, api, interfaces=INTERFACES, node=None, tree=()):
         self.api = api
@@ -106,10 +117,6 @@ class Resource(object):
         if node:
             tree = tree + (node,)
         self.tree = tree
-        self.interfaces_by_method = {}
-
-    def update_interface(self, interface):
-        raise NotImplemented
 
     def __getattr__(self, attr):
         if attr in getattr(self, '__dict__'):
@@ -120,10 +127,11 @@ class Resource(object):
         try:
             interface = self.interfaces[attr]
         except KeyError:
-            try:
-                interface = self.interfaces_by_method[attr]
-            except KeyError:
-                pass
+            if 'interfaces_by_method' in self.__dict__:
+                try:
+                    interface = self.interfaces_by_method[attr]
+                except KeyError:
+                    pass
         return Resource(self.api, interface, attr, self.tree)
 
     def __call__(self, endpoint=None, **kwargs):
@@ -134,18 +142,19 @@ class Resource(object):
             # Handle undefined interfaces
             resource = self.interfaces.get(endpoint, {})
             endpoint = endpoint.replace('.', '/')
+            method = self.node.upper()
         else:
             resource = self.interfaces
             endpoint = '/'.join(self.tree)
+            method = kwargs.pop('method', resource.get('method'))
+
+            if not method:
+                raise InterfaceNotDefined(
+                    'Interface is not defined, you must pass ``method`` (HTTP Method).')
+
         for k in resource.get('required', []):
             if k not in (x.split(':')[0] for x in compat.iterkeys(kwargs)):
                 raise ValueError('Missing required argument: %s' % k)
-
-        method = kwargs.pop('method', resource.get('method'))
-
-        if not method:
-            raise InterfaceNotDefined(
-                'Interface is not defined, you must pass ``method`` (HTTP Method).')
 
         method = method.upper()
         if method not in ('GET', 'POST'):
@@ -185,15 +194,8 @@ class Resource(object):
         else:
             data = urllib.urlencode(params)
 
-        conn = httplib.HTTPSConnection(HOST, timeout=api.timeout)
-        conn.request(method, path, data, headers)
-        response = conn.getresponse()
-
-        try:
+        with api.http_client(method, path, data, headers, api.timeout) as response:
             body = response.read()
-        finally:
-            # Close connection
-            conn.close()
 
         if response.getheader('Content-Encoding') == 'gzip':
             # See: http://stackoverflow.com/a/2424549
@@ -232,7 +234,7 @@ class DisqusAPI(Resource):
     }
 
     def __init__(self, secret_key=None, public_key=None, format='json', version='3.0',
-                 timeout=None, interfaces=INTERFACES, **kwargs):
+                 timeout=None, interfaces=INTERFACES, http_client=https_client, **kwargs):
         self.secret_key = secret_key
         self.public_key = public_key
         if not public_key:
@@ -242,6 +244,7 @@ class DisqusAPI(Resource):
         self.timeout = timeout or socket.getdefaulttimeout()
         self.interfaces = interfaces
         self.interfaces_by_method = build_interfaces_by_method(self.interfaces)
+        self.http_client = http_client
         super(DisqusAPI, self).__init__(self)
 
     @property

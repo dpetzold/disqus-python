@@ -11,6 +11,9 @@ if PY3:
 
     xrange = range
 
+    def encode(s, encoding):
+        return bytes(s, encoding)
+
     import http.client as http_client  # NOQA
     import urllib.parse as urllib_parse  # NOQA
 else:
@@ -19,6 +22,9 @@ else:
 
     def iteritems(d, **kw):
         return iter(d.iteritems(**kw))
+
+    def encode(s, encoding):
+        return s.encode(encoding)
 
     xrange = xrange
 

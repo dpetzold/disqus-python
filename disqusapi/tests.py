@@ -1,26 +1,11 @@
 import mock
 import os
 import socket
+from contextlib import contextmanager
 
 import disqusapi
-from disqusapi.compat import xrange
+from disqusapi.compat import encode, xrange
 from disqusapi.tests_compat import TestCase
-
-extra_interface = {
-    "reserved": {
-        "global": {
-            "word": {
-                "method": "GET",
-                "required": [
-                    "text",
-                ],
-                "formats": [
-                    "json",
-                ],
-            }
-        }
-    }
-}
 
 
 extra_interface = {
@@ -64,9 +49,26 @@ class MockResponse(object):
     def __init__(self, body, status=200):
         self.body = body
         self.status = status
+        self.headers = {}
+
+    def getheader(self, header):
+        return self.headers.get(header)
 
     def read(self):
-        return self.body
+        return encode(self.body, 'utf-8')
+
+
+def build_mock_client(body, status):
+    @contextmanager
+    def mock_client(*args):
+        yield MockResponse(body, status)
+    return mock_client
+
+
+mock_400_client = build_mock_client(
+    '{"code":7,"response":"You cannot access this resource using POST"}', 400)
+
+mock_200_client = build_mock_client('{"code":0,"response": [{}]}', 200)
 
 
 class DisqusAPITest(TestCase):
@@ -153,15 +155,38 @@ class DisqusAPITest(TestCase):
 
         self.assertEquals(len(response1), len(response2))
 
+    def test_interface_not_defined_ok(self):
+        api = disqusapi.DisqusAPI(
+            self.API_SECRET,
+            self.API_PUBLIC,
+            http_client=mock_200_client)
+
+        del api.interfaces['posts']['list']
+        del api.interfaces_by_method['get']['posts.list']
+
+        api_response = api.get('posts.list')
+        self.assertEquals(api_response.response, [{}])
+
+    def test_interface_not_defined_dne(self):
+        api = disqusapi.DisqusAPI(
+            self.API_SECRET,
+            self.API_PUBLIC,
+            http_client=mock_400_client)
+        with self.assertRaises(disqusapi.APIError):
+            api.post('posts.list')
+
     def test_update_interface_legacy(self):
         api = disqusapi.DisqusAPI(self.API_SECRET, self.API_PUBLIC)
         with self.assertRaises(disqusapi.InterfaceNotDefined):
             api.interface.update(extra_interface)
 
     def test_invalid_method(self):
-        api = disqusapi.DisqusAPI(self.API_SECRET, self.API_PUBLIC)
+        api = disqusapi.DisqusAPI(
+            self.API_SECRET,
+            self.API_PUBLIC,
+            http_client=mock_200_client)
         with self.assertRaises(disqusapi.InvalidHTTPMethod):
-            api.get('posts.list', method='lol', forum='disqus')
+            api.notamethod('posts.list', forum='disqus')
 
     def test_update_interface(self):
         api = disqusapi.DisqusAPI(self.API_SECRET, self.API_PUBLIC)
