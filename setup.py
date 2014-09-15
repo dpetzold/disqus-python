@@ -18,7 +18,7 @@ class PyTest(TestCommand):
 
 setup(
     name='disqus-python',
-    version='0.4.2',
+    version='0.4.3',
     author='DISQUS',
     author_email='opensource@disqus.com',
     url='https://github.com/disqus/disqus-python',
