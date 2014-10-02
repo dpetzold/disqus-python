@@ -1,7 +1,6 @@
 import mock
 import os
 import socket
-from contextlib import contextmanager
 
 import disqusapi
 from disqusapi.compat import encode, xrange
@@ -46,22 +45,19 @@ def iter_results():
 
 
 class MockResponse(object):
-    def __init__(self, body, status=200):
+    def __init__(self, body, status_code=200):
         self.body = body
-        self.status = status
+        self.status_code = status_code
         self.headers = {}
 
-    def getheader(self, header):
-        return self.headers.get(header)
-
-    def read(self):
-        return encode(self.body, 'utf-8')
+    @property
+    def text(self):
+        return self.body
 
 
 def build_mock_client(body, status):
-    @contextmanager
-    def mock_client(*args):
-        yield MockResponse(body, status)
+    def mock_client(*args, **kwargs):
+        return MockResponse(body, status)
     return mock_client
 
 

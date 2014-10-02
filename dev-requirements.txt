@@ -2,5 +2,6 @@
 flake8
 mock
 pytest
+tox
 twine
 wheel

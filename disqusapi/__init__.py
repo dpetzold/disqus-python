@@ -13,11 +13,10 @@ except Exception:  # pragma: no cover
     __version__ = 'unknown'
 
 import re
-import zlib
 import os.path
 import warnings
 import socket
-from contextlib import contextmanager
+import requests
 
 try:
     import simplejson as json
@@ -26,8 +25,6 @@ except ImportError:
 
 from disqusapi.paginator import Paginator
 from disqusapi import compat
-from disqusapi.compat import http_client as httplib
-from disqusapi.compat import urllib_parse as urllib
 from disqusapi.utils import build_interfaces_by_method
 
 __all__ = ['DisqusAPI', 'Paginator']
@@ -99,14 +96,17 @@ class Result(object):
         return list.__contains__(self.response, key)
 
 
-@contextmanager
-def https_client(method, path, data, headers, timeout):
-    conn = httplib.HTTPSConnection(HOST, timeout=timeout)
-    conn.request(method, path, data, headers)
-    try:
-        yield conn.getresponse()
-    finally:
-        conn.close()
+def https_client(method, url, data=None, headers={}, timeout=1):
+    kwargs = {
+        'headers': headers,
+        'timeout': timeout,
+    }
+    if data is not None:
+        if method == 'GET':
+            kwargs['params'] = data
+        elif method == 'POST':
+            kwargs['data'] = data
+    return getattr(requests, method.lower())(url, **kwargs)
 
 
 class Resource(object):
@@ -142,7 +142,7 @@ class Resource(object):
             # Handle undefined interfaces
             resource = self.interfaces.get(endpoint, {})
             endpoint = endpoint.replace('.', '/')
-            method = self.node.upper()
+            method = self.node
         else:
             resource = self.interfaces
             endpoint = '/'.join(self.tree)
@@ -166,7 +166,8 @@ class Resource(object):
         format = kwargs.pop('format', api.format)
         formatter, formatter_error = api.formats[format]
 
-        path = '/api/%s/%s.%s' % (version, endpoint, format)
+        url = 'https://{host}/api/{version}/{endpoint}.{format}'.format(
+            host=HOST, version=version, endpoint=endpoint, format=format)
 
         if 'api_secret' not in kwargs and api.secret_key:
             kwargs['api_secret'] = api.secret_key
@@ -175,52 +176,28 @@ class Resource(object):
 
         # We need to ensure this is a list so that
         # multiple values for a key work
-        params = []
+        params = {}
         for k, v in compat.iteritems(kwargs):
             if isinstance(v, (list, tuple)):
                 for val in v:
-                    params.append((k, val))
+                    params[k] = val
             else:
-                params.append((k, v))
+                params[k] = v
 
         headers = {
             'User-Agent': 'disqus-python/%s' % __version__,
             'Accept-Encoding': 'gzip',
         }
 
-        if method == 'GET':
-            path = '%s?%s' % (path, urllib.urlencode(params))
-            data = ''
-        else:
-            data = urllib.urlencode(params)
-
-        with api.http_client(method, path, data, headers, api.timeout) as response:
-            body = response.read()
-
-        if response.getheader('Content-Encoding') == 'gzip':
-            # See: http://stackoverflow.com/a/2424549
-            body = zlib.decompress(body, 16 + zlib.MAX_WBITS)
-
-        # Determine the encoding of the response and respect
-        # the Content-Type header, but default back to utf-8
-        content_type = response.getheader('Content-Type')
-        if content_type is None:
-            encoding = DEFAULT_ENCODING
-        else:
-            try:
-                encoding = CHARSET_RE.search(content_type).group(1)
-            except AttributeError:
-                encoding = DEFAULT_ENCODING
-
-        body = body.decode(encoding)
+        response = api.http_client(method, url, data=params, headers=headers, timeout=api.timeout)
 
         try:
             # Coerce response to Python
-            data = formatter(body)
+            data = formatter(response.text)
         except formatter_error:
-            raise FormattingError(body)
+            raise FormattingError(response.text)
 
-        if response.status != 200:
+        if response.status_code != 200:
             raise ERROR_MAP.get(data['code'], APIError)(data['code'], data['response'])
 
         if isinstance(data['response'], list):
